@@ -699,7 +699,7 @@
         statusDiv.onAdd = function() {
             this._div = L.DomUtil.create('div');
             this._div.style.cssText = 'background:white; padding:8px 12px; border-radius:6px; border:1px solid #ccc; font-size:13px; max-width:220px;';
-            this._div.innerHTML = '🖱️ Click a museum to set <b>Start</b>';
+            this._div.innerHTML = '👆 Tryk på et museum for at sætte <b>Start</b>';
             return this._div;
         };
         statusDiv.addTo(map);
@@ -709,7 +709,7 @@
         clearControl.onAdd = function() {
             var btn = L.DomUtil.create('button');
             btn.id = 'clearRouteBtn';
-            btn.innerHTML = '🗺️ Clear Route';
+            btn.innerHTML = '🗺️ Ryd rute';
             btn.style.cssText = 'display:block; width:100%; background:white; border:1px solid #ccc; border-radius:6px; padding:7px 12px; font-size:13px; cursor:pointer; box-shadow:0 1px 5px rgba(0,0,0,0.2); margin-bottom:4px;';
             btn.onmouseover = function(){ btn.style.background='#f4f4f4'; };
             btn.onmouseout = function(){ btn.style.background='white'; };
@@ -722,12 +722,22 @@
         clearControl.addTo(map);
 
         function updateStatus() {
-            if (selectedMuseums.length === 0) {
-                statusDiv._div.innerHTML = '🖱️ Click a museum to set <b>Start</b>';
-            } else if (selectedMuseums.length === 1) {
-                statusDiv._div.innerHTML = '✅ Start: <b>' + selectedMuseums[0] + '</b><br>🖱️ Click another museum for <b>End</b>';
+            if (trackingActive) {
+                // GPS mode
+                if (selectedMuseums.length === 0) {
+                    statusDiv._div.innerHTML = '📍 GPS aktivt &mdash; tryk på et museum for at gå dertil';
+                } else {
+                    statusDiv._div.innerHTML = '🚶 Rute til: <b>' + selectedMuseums[0] + '</b><br><i>Tryk på et andet museum for ny rute</i>';
+                }
             } else {
-                statusDiv._div.innerHTML = '✅ Start: <b>' + selectedMuseums[0] + '</b><br>✅ End: <b>' + selectedMuseums[1] + '</b><br><i>Click any museum to reset</i>';
+                // Museum-to-museum mode
+                if (selectedMuseums.length === 0) {
+                    statusDiv._div.innerHTML = '👆 Tryk på et museum for at sætte <b>Start</b>';
+                } else if (selectedMuseums.length === 1) {
+                    statusDiv._div.innerHTML = '✅ Start: <b>' + selectedMuseums[0] + '</b><br>👆 Tryk på et andet museum som <b>Slut</b>';
+                } else {
+                    statusDiv._div.innerHTML = '✅ Fra: <b>' + selectedMuseums[0] + '</b><br>✅ Til: <b>' + selectedMuseums[1] + '</b><br><i>Tryk på et museum for at nulstille</i>';
+                }
             }
         }
         updateStatus();
@@ -739,12 +749,21 @@
                 var latlng = e.latlng;
                 var name = (e.target && e.target.feature && e.target.feature.properties && e.target.feature.properties['Navn']) ? e.target.feature.properties['Navn'] : 'Museum';
 
+                // GPS mode: route from live location to tapped museum
+                if (trackingActive && myLatLng) {
+                    selectedPoints = [myLatLng, latlng];
+                    selectedMuseums = [name];
+                    routingControl.setWaypoints(selectedPoints);
+                    updateStatus();
+                    return;
+                }
+
+                // Museum-to-museum mode
                 if (selectedPoints.length >= 2) {
                     selectedPoints = [];
                     selectedMuseums = [];
                     routingControl.setWaypoints([]);
                 }
-
                 selectedPoints.push(latlng);
                 selectedMuseums.push(name);
                 routingControl.setWaypoints(selectedPoints);
@@ -758,6 +777,7 @@
         var locationAccCircle = null;
         var watchId = null;
         var trackingActive = false;
+        var myLatLng = null; // always holds latest GPS position
 
         var locateControl = L.control({position: 'topleft'});
         locateControl.onAdd = function() {
@@ -785,15 +805,18 @@
             trackingActive = true;
             btn.classList.add('active');
             btn.innerHTML = '🔵';
+            // Clear any existing museum-to-museum route when GPS starts
+            selectedPoints = []; selectedMuseums = []; routingControl.setWaypoints([]);
+            updateStatus();
             watchId = navigator.geolocation.watchPosition(
                 function(pos) {
-                    var latlng = L.latLng(pos.coords.latitude, pos.coords.longitude);
+                    myLatLng = L.latLng(pos.coords.latitude, pos.coords.longitude);
                     var acc = pos.coords.accuracy;
                     // Update or create accuracy circle
                     if (locationAccCircle) {
-                        locationAccCircle.setLatLng(latlng).setRadius(acc);
+                        locationAccCircle.setLatLng(myLatLng).setRadius(acc);
                     } else {
-                        locationAccCircle = L.circle(latlng, {
+                        locationAccCircle = L.circle(myLatLng, {
                             radius: acc,
                             color: '#1a73e8',
                             fillColor: '#1a73e8',
@@ -803,7 +826,7 @@
                     }
                     // Update or create position dot
                     if (locationMarker) {
-                        locationMarker.setLatLng(latlng);
+                        locationMarker.setLatLng(myLatLng);
                     } else {
                         var dotIcon = L.divIcon({
                             className: '',
@@ -811,9 +834,15 @@
                             iconSize: [16, 16],
                             iconAnchor: [8, 8]
                         });
-                        locationMarker = L.marker(latlng, { icon: dotIcon, zIndexOffset: 1000 }).addTo(map);
+                        locationMarker = L.marker(myLatLng, { icon: dotIcon, zIndexOffset: 1000 }).addTo(map);
                         // Pan to location on first fix
-                        map.panTo(latlng);
+                        map.panTo(myLatLng);
+                        updateStatus(); // refresh hint after first fix
+                    }
+                    // If a route to a museum is already active, update the start waypoint live
+                    if (selectedMuseums.length > 0 && selectedPoints.length === 2) {
+                        selectedPoints[0] = myLatLng;
+                        routingControl.setWaypoints(selectedPoints);
                     }
                 },
                 function(err) {
@@ -827,11 +856,15 @@
 
         function stopTracking(btn) {
             trackingActive = false;
+            myLatLng = null;
             btn.classList.remove('active');
             btn.innerHTML = '📍';
             if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
             if (locationMarker) { map.removeLayer(locationMarker); locationMarker = null; }
             if (locationAccCircle) { map.removeLayer(locationAccCircle); locationAccCircle = null; }
+            // Clear any GPS-based route
+            selectedPoints = []; selectedMuseums = []; routingControl.setWaypoints([]);
+            updateStatus();
         }
         // ── End live GPS ───────────────────────────────────────────────
         // Routing attached inside makeClusterLayer
